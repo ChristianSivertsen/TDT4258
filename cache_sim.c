@@ -37,12 +37,7 @@ typedef struct
 {
     uint64_t accesses;
     uint64_t hits;
-    // You can declare additional statistics if
-    // you like, however you are now allowed to
-    // remove the accesses or hits
 } cache_stat_t;
-
-// DECLARE CACHES AND COUNTERS FOR THE STATS HERE
 
 uint32_t cache_size;
 uint32_t block_size = 64;
@@ -50,8 +45,7 @@ uint32_t num_blocks;
 cache_map_t cache_mapping;
 cache_org_t cache_org;
 uint32_t counter = 0;
-
-// USE THIS FOR YOUR CACHE STATISTICS
+uint32_t counter2;
 cache_stat_t cache_statistics;
 
 /***
@@ -80,7 +74,9 @@ parsed_address parse_address(cache_map_t mapping, mem_access_t access, uint32_t 
     }
     return result;
 }
-
+/**
+ * Initializes the cache as an array of zeros
+ */
 uint32_t *initialize_cache(uint32_t num_blocks)
 {
     uint32_t *cache = (uint32_t *)malloc(num_blocks * sizeof(uint32_t));
@@ -89,13 +85,20 @@ uint32_t *initialize_cache(uint32_t num_blocks)
     return cache;
 }
 
-void load_block_uc(uint32_t *cache[], cache_org_t org, cache_map_t mapping, parsed_address parsed, uint32_t num_blocks)
+/**
+ * Accesses a block in the cache. If the block is not in the cache, it is loaded into the cache.
+ * 4 cache configurations are supported:
+ * If the cache is fully associative, the block is loaded into the first empty slot and FIFO replacement thereafter.
+ */
+
+void access_block(uint32_t *cache[], cache_org_t org, cache_map_t mapping, parsed_address parsed, uint32_t num_blocks, mem_access_t access)
 {
     uint32_t index = parsed.index;
     uint32_t tag = parsed.tag;
+
+    // Unified direct mapped
     if (org == uc && mapping == dm)
     {
-        printf("Cache: %x\n tag: %x\n", cache[index], tag);
         if (cache[index] == tag)
         {
             cache_statistics.hits++;
@@ -107,6 +110,7 @@ void load_block_uc(uint32_t *cache[], cache_org_t org, cache_map_t mapping, pars
         cache_statistics.accesses++;
         return;
     }
+    // Unified fully associative
     else if (org == uc && mapping == fa)
     {
         cache_statistics.accesses++;
@@ -131,6 +135,96 @@ void load_block_uc(uint32_t *cache[], cache_org_t org, cache_map_t mapping, pars
         else
         {
             counter++;
+        }
+    }
+
+    // Split direct mapped
+    else if (org == sc && mapping == dm)
+    {
+        uint32_t offset = block_size / 2;
+
+        if (access.accesstype == instruction)
+        {
+            if (cache[index] == tag)
+            {
+                cache_statistics.hits++;
+            }
+            else
+            {
+                cache[index] = tag;
+            }
+            cache_statistics.accesses++;
+            return;
+        }
+        else if (access.accesstype == data)
+        {
+            if (cache[index + offset] == tag)
+            {
+                cache_statistics.hits++;
+            }
+            else
+            {
+                cache[index + offset] = tag;
+            }
+            cache_statistics.accesses++;
+            return;
+        }
+    }
+
+    // Split fully associative
+    else if (org == sc && mapping == fa)
+    {
+        uint32_t offset = block_size / 2;
+        cache_statistics.accesses++;
+        if (access.accesstype == 0)
+        {
+            for (int i = 0; i < offset; i++)
+            {
+                if (cache[i] == tag)
+                {
+                    cache_statistics.hits++;
+                    return;
+                }
+                else if (cache[i] == 0)
+                {
+                    cache[i] = tag;
+                    return;
+                }
+            }
+            cache[counter] = tag;
+            if (counter >= offset - 1)
+            {
+                counter = 0;
+            }
+            else
+            {
+                counter++;
+            }
+        }
+        else if (access.accesstype == 1)
+        {
+            for (int i = 0; i < offset; i++)
+            {
+                if (cache[i + offset] == tag)
+                {
+                    cache_statistics.hits++;
+                    return;
+                }
+                else if (cache[i + offset] == 0)
+                {
+                    cache[i + offset] = tag;
+                    return;
+                }
+            }
+            cache[counter2] = tag;
+            if (counter2 >= num_blocks - 1)
+            {
+                counter2 = offset;
+            }
+            else
+            {
+                counter2++;
+            }
         }
     }
 }
@@ -165,6 +259,7 @@ mem_access_t read_transaction(FILE *ptr_file)
 void main(int argc, char **argv)
 {
     uint32_t index_bits;
+    counter2 = block_size / 2;
     // Reset statistics:
     memset(&cache_statistics, 0, sizeof(cache_stat_t));
 
@@ -241,11 +336,11 @@ void main(int argc, char **argv)
         // If no transactions left, break out of loop
         if (access.address == 0)
             break;
-        printf("%d %x\n", access.accesstype, access.address);
+        // printf("%d %x\n", access.accesstype, access.address);
         /* Do a cache access */
         // ADD YOUR CODE HERE
         parsed_address parsed = parse_address(cache_mapping, access, num_blocks, block_size);
-        load_block_uc(cache, cache_org, cache_mapping, parsed, num_blocks);
+        access_block(cache, cache_org, cache_mapping, parsed, num_blocks, access);
     }
 
     /* Print the statistics */
